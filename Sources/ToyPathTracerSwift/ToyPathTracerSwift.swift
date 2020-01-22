@@ -326,7 +326,6 @@ struct Camera
 
 var DO_ANIMATE = false
 var DO_LIGHT_SAMPLING = true
-var DO_THREADED = true
 // 46 spheres (2 emissive) when enabled; 9 spheres (1 emissive) when disabled
 var DO_BIG_SCENE = true
 
@@ -600,7 +599,8 @@ class Tracer
   }
 }
 
-func DrawTest(_ time: Float, _ frames: Int, _ screenWidth: Int, _ screenHeight: Int, _ pixelStride: Int, _ backbuffer: BackBuffer) -> Int
+func DrawTest(_ time: Float, _ frames: Int, _ screenWidth: Int, _ screenHeight: Int,
+              _ pixelStride: Int, _ backbuffer: BackBuffer, _ threaded: Bool) -> Int
 {
   var rayCount = 0
   for frameCount in 0..<frames {
@@ -619,7 +619,7 @@ func DrawTest(_ time: Float, _ frames: Int, _ screenWidth: Int, _ screenHeight: 
     
     let cam = Camera(lookfrom, lookat, float3(0, 1, 0), 60, Float(screenWidth) / Float(screenHeight), aperture, distToFocus)
     
-    if DO_THREADED {
+    if threaded {
       var raycountLock = pthread_mutex_t()
       pthread_mutex_init(&raycountLock, nil)
       DispatchQueue.concurrentPerform(iterations:screenHeight) {y in
@@ -667,10 +667,10 @@ public class BackBuffer {
   }
 }
 
-public func trace(width: Int, height: Int, frames: Int)-> BackBuffer {
+public func trace(width: Int, height: Int, frames: Int, threaded: Bool = true)-> BackBuffer {
   let backBuffer = BackBuffer(w:width, h:height)
   let startTime = Date()
-  let rayCount = DrawTest(0, frames, backBuffer.w, backBuffer.h, backBuffer.pixelStride, backBuffer)
+  let rayCount = DrawTest(0, frames, backBuffer.w, backBuffer.h, backBuffer.pixelStride, backBuffer, threaded)
   let elapsedTime = Date().timeIntervalSince(startTime)
   let mraysPerSecond = Double(rayCount) / (1e6 * elapsedTime)
   let formattedMRaysPerSecond = String(format:"%.2f", mraysPerSecond)
