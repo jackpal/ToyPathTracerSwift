@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 struct MathF {
   static func Abs(_ f: Float) -> Float { f.magnitude }
@@ -9,7 +10,7 @@ struct MathF {
   static func Tan(_ f : Float) -> Float { Foundation.tan(f) }
 }
 
-public struct float3
+public struct float3 : Sendable
 {
   public var x: Float
   public var y: Float
@@ -324,10 +325,10 @@ struct Camera
   var lensRadius : Float
 }
 
-var DO_ANIMATE = false
-var DO_LIGHT_SAMPLING = true
+let DO_ANIMATE = false
+let DO_LIGHT_SAMPLING = true
 // 46 spheres (2 emissive) when enabled; 9 spheres (1 emissive) when disabled
-var DO_BIG_SCENE = true
+let DO_BIG_SCENE = true
 
 class Scene {
   var spheres: [Sphere]
@@ -602,7 +603,7 @@ class Tracer
 func DrawTest(_ time: Float, _ frames: Int, _ screenWidth: Int, _ screenHeight: Int,
               _ pixelStride: Int, _ backbuffer: BackBuffer, _ threaded: Bool) -> Int
 {
-  var rayCount = 0
+  let rayCount = Atomic<Int>(0)
   for frameCount in 0..<frames {
     if DO_ANIMATE {
       // TODO: Can we do this somewhere else and make DrawText non mutating?
@@ -620,27 +621,24 @@ func DrawTest(_ time: Float, _ frames: Int, _ screenWidth: Int, _ screenHeight: 
     let cam = Camera(lookfrom, lookat, float3(0, 1, 0), 60, Float(screenWidth) / Float(screenHeight), aperture, distToFocus)
     
     if threaded {
-      var raycountLock = pthread_mutex_t()
-      pthread_mutex_init(&raycountLock, nil)
       DispatchQueue.concurrentPerform(iterations:screenHeight) {y in
         let tracer = Tracer()
         let localRayCount = tracer.TraceRowJob(y, screenWidth, screenHeight, frameCount, pixelStride, backbuffer.scanlines[y], cam)
-        pthread_mutex_lock(&raycountLock)
-        rayCount += localRayCount
-        pthread_mutex_unlock(&raycountLock)
+          rayCount.wrappingAdd(localRayCount, ordering: .relaxed)
         
       }
     } else {
       let tracer = Tracer()
       for y in 0..<screenHeight {
-        rayCount += tracer.TraceRowJob(y, screenWidth, screenHeight, frameCount, pixelStride, backbuffer.scanlines[y], cam)
+        let localRayCount = tracer.TraceRowJob(y, screenWidth, screenHeight, frameCount, pixelStride, backbuffer.scanlines[y], cam)
+        rayCount.wrappingAdd(localRayCount, ordering: .relaxed)
       }
     }
   }
-  return rayCount
+  return rayCount.load(ordering: .relaxed)
 }
 
-public class Scanline {
+public final class Scanline {
   public let w: Int
   public let pixelStride = 3
   public var buffer: [Float]
@@ -651,7 +649,7 @@ public class Scanline {
   }
 }
 
-public class BackBuffer {
+public final class BackBuffer : @unchecked Sendable {
   public var scanlines: [Scanline]
   public let w: Int
   public let pixelStride = 3

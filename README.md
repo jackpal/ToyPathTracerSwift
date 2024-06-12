@@ -1,3 +1,3 @@
 # ToyPathTracerSwift
 
-A description of this package.
+A toy path tracer.

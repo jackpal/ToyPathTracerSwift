@@ -1,15 +1,8 @@
-import XCTest
+import Testing
 @testable import ToyPathTracerSwift
 
-final class ToyPathTracerSwiftTests: XCTestCase {
-    func testExample() {
-        // This is an example of a functional test case.
-        // Use XCTAssert and related functions to verify your tests produce the correct
-        // results.
-        XCTAssertEqual(ToyPathTracerSwift().text, "Hello, World!")
+@Test
+func testExample() {
+        let point = float3(1,2,3)
+    #expect(point.x == 1)
     }
-
-    static var allTests = [
-        ("testExample", testExample),
-    ]
-}
