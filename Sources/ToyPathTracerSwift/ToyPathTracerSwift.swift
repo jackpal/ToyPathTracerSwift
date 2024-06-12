@@ -559,9 +559,8 @@ class Tracer
     }
   }
   
-  func TraceRowJob(_ y: Int, _ screenWidth: Int, _ screenHeight: Int, _ frameCount :Int, _ pixelStride: Int, _ scanline: Scanline, _ cam: Camera) -> Int
+  func TraceRowJob(_ y: Int, _ screenWidth: Int, _ screenHeight: Int, _ frameCount :Int, _ pixelStride: Int, _ aBufferWriter: AccumulationBufferWriter, _ cam: Camera) -> Int
   {
-    var scanlineIndex = 0
     let invWidth = Float(1.0) / Float(screenWidth)
     let invHeight = Float(1.0) / Float(screenHeight)
     var lerpFac = Float(frameCount) / Float(frameCount + 1)
@@ -584,16 +583,7 @@ class Tracer
       }
       col *= 1.0 / Float(DO_SAMPLES_PER_PIXEL)
       
-      let bbr = scanline.buffer[scanlineIndex + 0]
-      let bbg = scanline.buffer[scanlineIndex + 1]
-      let bbb = scanline.buffer[scanlineIndex + 2]
-      
-      let prev = float3(bbr, bbg, bbb)
-      col = prev * lerpFac + col * (1 - lerpFac)
-      scanline.buffer[scanlineIndex + 0] = col.x
-      scanline.buffer[scanlineIndex + 1] = col.y
-      scanline.buffer[scanlineIndex + 2] = col.z
-      scanlineIndex += pixelStride
+      aBufferWriter.writePixel(x: x, y: y, lerpFactor: lerpFac, color: col)
     }
     // }
     return rayCount
@@ -606,7 +596,7 @@ func DrawTest(_ time: Float, _ frames: Int, _ screenWidth: Int, _ screenHeight: 
   let rayCount = Atomic<Int>(0)
   for frameCount in 0..<frames {
     if DO_ANIMATE {
-      // TODO: Can we do this somewhere else and make DrawText non mutating?
+      // TODO: Can we do this somewhere else and make DrawTest non mutating?
       //           scene.spheres[1].center.y = MathF.Cos(time)+1.0
       //           scene.spheres[8].center.z = MathF.Sin(time)*0.3
     }
@@ -623,14 +613,14 @@ func DrawTest(_ time: Float, _ frames: Int, _ screenWidth: Int, _ screenHeight: 
     if threaded {
       DispatchQueue.concurrentPerform(iterations:screenHeight) {y in
         let tracer = Tracer()
-        let localRayCount = tracer.TraceRowJob(y, screenWidth, screenHeight, frameCount, pixelStride, backbuffer.scanlines[y], cam)
+        let localRayCount = tracer.TraceRowJob(y, screenWidth, screenHeight, frameCount, pixelStride, backbuffer, cam)
           rayCount.wrappingAdd(localRayCount, ordering: .relaxed)
         
       }
     } else {
       let tracer = Tracer()
       for y in 0..<screenHeight {
-        let localRayCount = tracer.TraceRowJob(y, screenWidth, screenHeight, frameCount, pixelStride, backbuffer.scanlines[y], cam)
+        let localRayCount = tracer.TraceRowJob(y, screenWidth, screenHeight, frameCount, pixelStride, backbuffer, cam)
         rayCount.wrappingAdd(localRayCount, ordering: .relaxed)
       }
     }
@@ -638,7 +628,11 @@ func DrawTest(_ time: Float, _ frames: Int, _ screenWidth: Int, _ screenHeight: 
   return rayCount.load(ordering: .relaxed)
 }
 
-public final class Scanline {
+protocol AccumulationBufferWriter {
+  func writePixel(x: Int, y: Int, lerpFactor: Float, color: float3)
+}
+
+public final class Scanline : AccumulationBufferWriter {
   public let w: Int
   public let pixelStride = 3
   public var buffer: [Float]
@@ -647,9 +641,31 @@ public final class Scanline {
     self.w = w
     buffer = [Float](repeating: 0, count: w * pixelStride)
   }
+  
+  func writePixel(x: Int, y:Int, lerpFactor: Float, color: float3) {
+    assert(y == 0)
+    let scanlineIndex = x * pixelStride
+    let bbr = buffer[scanlineIndex + 0]
+    let bbg = buffer[scanlineIndex + 1]
+    let bbb = buffer[scanlineIndex + 2]
+    
+    let prev = float3(bbr, bbg, bbb)
+    let col = prev * lerpFactor + color * (1 - lerpFactor)
+    buffer[scanlineIndex + 0] = col.x
+    buffer[scanlineIndex + 1] = col.y
+    buffer[scanlineIndex + 2] = col.z
+
+  }
 }
 
-public final class BackBuffer : @unchecked Sendable {
+public protocol PixelBufferReader {
+  var w: Int { get }
+  var h: Int { get }
+  func getPixel(x: Int, y: Int) -> float3
+}
+
+class BackBuffer : @unchecked Sendable, AccumulationBufferWriter, PixelBufferReader {
+  
   public var scanlines: [Scanline]
   public let w: Int
   public let pixelStride = 3
@@ -663,9 +679,21 @@ public final class BackBuffer : @unchecked Sendable {
       scanlines.append(Scanline(w:w))
     }
   }
+  
+  func writePixel(x: Int, y: Int, lerpFactor: Float, color: float3) {
+    scanlines[y].writePixel(x: x, y: 0, lerpFactor: lerpFactor, color: color)
+  }
+  
+  public func getPixel(x: Int, y: Int) -> float3 {
+    let r = scanlines[y].buffer[x * pixelStride + 0]
+    let g = scanlines[y].buffer[x * pixelStride + 1]
+    let b = scanlines[y].buffer[x * pixelStride + 2]
+    return float3(r, g, b)
+  }
+
 }
 
-public func trace(width: Int, height: Int, frames: Int, threaded: Bool = true)-> BackBuffer {
+public func trace(width: Int, height: Int, frames: Int, threaded: Bool = true)-> PixelBufferReader {
   let backBuffer = BackBuffer(w:width, h:height)
   let startTime = Date()
   let rayCount = DrawTest(0, frames, backBuffer.w, backBuffer.h, backBuffer.pixelStride, backBuffer, threaded)
